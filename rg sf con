@@ -1,0 +1,668 @@
+# -*- coding: utf-8 -*-
+"""
+Modified on Fri Dec 17 11:15:45 2021
+Modified on Mon Feb 07 2:07:13 2022 - Added Views in drop down
+Modified on Tues Feb 08 19:57:27 2022 - Updated string function
+Modified on Mon Feb 28 16:20:02 2022 - Updated ATOS logo
+@author: Sudhanshi S.
+"""
+import re
+import openpyxl
+from flask import Flask
+from flask import render_template,request,redirect,url_for
+import sqlparse
+import os
+#Location of the different conversion files
+loc = ("Snowflake\\workaround2.xlsx")
+loc1 = ("Snowflake\\noworkaround2.xlsx")
+loc2 = ("Snowflake\\exactsame2.xlsx")
+loc3 = ("Snowflake\\ddlworkaround.xlsx")
+loc4 = ("Snowflake\\ddlworkaroundnew.xlsx")
+
+#Loading the workbooks in different variables respectively
+wb = openpyxl.load_workbook(loc)
+wb1 = openpyxl.load_workbook(loc1)
+wb2 = openpyxl.load_workbook(loc2)
+wb3 = openpyxl.load_workbook(loc3) 
+wb4 = openpyxl.load_workbook(loc4)
+
+#Making the Workbook Active
+sheet = wb.active
+sheet1 = wb1.active
+sheet2 = wb2.active
+sheet3 = wb3.active
+sheet4 = wb4.active
+
+#Setting up the variable with the max no of column in the workbook
+max_col = sheet.max_column
+max_col1 = sheet1.max_column
+max_col2 = sheet2.max_column
+max_col3 = sheet3.max_column
+max_col4 = sheet4.max_column
+
+#Setting up the variable with the max no of rows in the workbook
+max_row = sheet.max_row
+max_row1 = sheet1.max_row
+max_row2 = sheet2.max_row
+max_row3 = sheet3.max_row
+max_row4 = sheet4.max_row
+
+
+app = Flask(__name__)
+
+data = ''
+bteq_script = ''
+text = ''
+@app.route('/')
+def home():
+    return render_template("main.html")
+
+@app.route('/convertagain')
+def convert_again():
+    return render_template("main.html")
+
+
+@app.route('/uploader' , methods = ['GET','POST'])
+def uploader():
+    if request.method == 'POST':
+        f = request.files['file']
+        data = f.read()
+    #Setting the location of bteq script
+    bteq = data.decode('utf-8')
+    data = bteq
+    bteq_script = bteq
+    parser = Parser()
+    bteq_script = parser.capture_params(bteq_script)
+    bteq_script = parser.procedure_correction(bteq_script)
+    bteq_script = parser.exactsame(bteq_script)
+    if parser.has_in_block_vars:
+        bteq_script = parser.clear_inblock_vars(bteq_script)
+    bteq_script = parser.workaround(bteq_script)
+    if re.search("USINuploadfromtextG",bteq_script):
+        bteq_script = parser.importfromfile(bteq_script)
+    if  re.search(".LABEL",bteq_script):
+        bteq_script = parser.label_procedure(bteq_script)
+    if parser.has_existing_params(bteq_script):
+        bteq_script = parser.capitalize_query_params(bteq_script, data)
+    bteq_script = bteq_script.replace('\r', '')
+    
+    return render_template("index.html",bteq_script= bteq,bigquery = bteq_script)
+
+@app.route('/uploadfromtext' , methods = ['POST'])
+def uploadtext():
+    text = request.form['text'].replace("\"", "")
+    script_type = request.form['script_type']
+    bteq_script = text
+    data = text
+    parser = Parser()
+    
+    if (int(script_type)) == 0:
+        
+        if bteq_script.find("OUTPUT") < 0:
+           bteq_script = re.sub("AS", "() RETURNS VARCHAR NOT NULL \n AS \n BEGIN", bteq_script)
+           bteq_script = re.sub("GO;", ";\n RETURN 0; \n END;\n", bteq_script)
+           print("--Please Copy your Converter Stored Procedure")
+           print(bteq_script)
+        else:
+        
+            if bteq_script.find("nvarchar"):
+                     bteq_script = re.sub("@", "(", bteq_script,count=1, flags=0)
+                     bteq_script = re.sub("@", "", bteq_script, count=0, flags=0)
+                     bteq_script = re.sub("nvarchar", "VARCHAR ", bteq_script)
+                     bteq_script_split=bteq_script.split()
+                
+            
+            if bteq_script.find("OUTPUT")>=0:
+                
+                fnd_ret = bteq_script[0:bteq_script.find("OUTPUT")+6]
+                fnd_ret = fnd_ret[bteq_script.rindex(","):bteq_script.find("OUTPUT")+6]
+                print("fnd_ret " + fnd_ret)
+                fnd_ret_pos=bteq_script.find(fnd_ret)
+                fnd_ret_len = len(fnd_ret)
+                print("fnd_ret pos " + str(fnd_ret_pos))
+                ret_var = " RETURN " + fnd_ret.split(" ")[0].lstrip(",") + " ; "
+                print("ret_var = " + ret_var)
+                bteq_script_len = len(bteq_script)
+                bteq_script=bteq_script[0:fnd_ret_pos] + ") RETURNS VARCHAR NOT NULL \n LANGUAGE SQL " + bteq_script[(fnd_ret_pos+fnd_ret_len):]
+                
+                bteq_script = re.sub(fnd_ret, ") RETURNS VARCHAR NOT NULL \n"
+                                               "LANGUAGE SQL ", bteq_script, count=1, flags=0)
+                
+                
+                
+                
+                bteq_script1 = bteq_script.split()
+                split_into = bteq_script1[bteq_script1.index("=") - 1]
+                split_into_1 = bteq_script1[bteq_script1.index("=") + 1]
+                bteq_script = re.sub("SELECT", "BEGIN \n"
+                                               "SELECT   ", bteq_script, count=0, flags=0)
+            
+                bteq_script_select_after=bteq_script.split("SELECT")[1]
+                bteq_script_select_before = bteq_script.split("SELECT")[0]
+            
+                bteq_script_select_from=bteq_script_select_after.split("FROM")[0]
+                bteq_script_select_from_after = bteq_script.split("FROM")[1]
+                value=bteq_script_select_from.split("=")
+                bteq_script=re.sub("BEGIN","BEGIN SELECT ",bteq_script_select_before, count=1, flags=0)
+                bteq_script=bteq_script+value[1]+"INTO :"+value[0].lstrip()+ " FROM " +bteq_script_select_from_after
+                
+                #bteq_script = re.sub("GO", "END", bteq_script, count=0, flags=0)
+                #bteq_script = re.sub("GO", "END", bteq_script, count=0, flags=0)
+                
+                #bteq_script_p1 = bteq_script.split("IF")[1]
+                bteq_script_p2 = bteq_script.split("SET",1)[0]
+                bteq_script_p=bteq_script.split("SET",1)[1]
+                
+                #if re.findall("BEGIN",bteq_script_p2):
+                #   bteq_script_p_begin= re.sub("BEGIN", "THEN", bteq_script_p2, count=1)
+                   
+                if re.findall("SET", bteq_script_p):
+                       
+                       bteq_script_p=re.sub("SET","LET", bteq_script_p,count=0)
+                       
+                       bteq_script_p=re.sub("@","", bteq_script_p,count=0)
+                       bteq_script_p=re.sub("=",':=', bteq_script_p,count=0)
+                       bteq_script_p = re.sub("BEGIN", "", bteq_script_p, count=1)
+                       bteq_script_p = re.sub("BEGIN", "", bteq_script_p, count=0)
+            
+            
+                       #bteq_script_p3 = bteq_script_p_begin+"LET"+bteq_script_p
+                       bteq_script = bteq_script_p2+"LET"+bteq_script_p
+                       
+                #bteq_script = re.sub("BEGIN", "", bteq_script)
+                #Code to find position of 1st Else and Last END
+                pos_go=bteq_script.rindex("GO")
+                pos_lst_end = bteq_script.rindex("END")
+                part_1 = re.sub("END","", bteq_script[0:pos_lst_end]) + "\n"
+                part_2 = "END IF"
+                part_3 = bteq_script[pos_lst_end+3:pos_go+2]
+                bteq_script = part_1 + part_2 + part_3
+                bteq_script = re.sub("GO", ";\n RETURN 0; \n END;\n", bteq_script)
+                
+                part_1 = re.sub("IF", "IF (" ,bteq_script[0:bteq_script.find("IF")+2])
+                part_2 = re.sub("BEGIN" , ") THEN" , bteq_script[bteq_script.find("IF")+2:len(bteq_script)] )
+                bteq_script=part_1 + part_2
+                
+                part_1 = bteq_script[0:bteq_script.find("LANGUAGE")]
+                part_1 = part_1[part_1.find("(")+1 : part_1.find(")" )].split(" ")[0]
+                #print("part 1 = " + part_1)              
+                bteq_script=bteq_script.replace(part_1 , " :"+part_1)
+                bteq_script=bteq_script.replace(" :"+part_1 , part_1, 1)
+                bteq_script = re.sub("ELSE", ret_var + "\n ELSE",bteq_script)
+                bteq_script = re.sub("END IF", ret_var + "\n END IF ", bteq_script)
+                print("--Please Copy your Converter Stored Procedure")
+                print(bteq_script)
+        
+                
+
+               
+        
+    if (int(script_type)) == 1:
+        
+        bteq_script = parser.ddlworkaround(bteq_script)
+        #bteq_script = parser.func_conversion(bteq_script1)
+        
+            
+    bteq_script = bteq_script.replace('\r', '')
+    bteq_script = bteq_script.strip()
+    bteq_script = re.sub("\[", "", bteq_script)
+    bteq_script = re.sub("\]", "", bteq_script)
+    #bteq_script = re.sub("\s+,","",bteq_script)
+
+    lines = bteq_script.split("\n")
+    non_empty_lines = [line for line in lines if line.strip() != ""]
+
+    bteq_script_without_empty_lines = ""
+    for line in non_empty_lines:
+        bteq_script_without_empty_lines += line + "\n"
+        
+    #return render_template("index.html",bteq_script= text,Snowflake = bteq_script.strip())
+#    return render_template("index.html",bteq_script= text,Snowflake = bteq_script_without_empty_lines)
+    return render_template("index.html",bteq_script= text,Snowflake = bteq_script_without_empty_lines.strip())
+class Parser():
+
+    def exactsame(self,data):
+    
+        for i in range(1,max_row2+1):
+            cell_obj = sheet2.cell(row =i, column = 1)
+            t = self.contains_word(cell_obj.value, data)
+            if t:
+                cell_replace = sheet2.cell(row = i,column = 2)
+                data = re.sub(cell_obj.value,cell_replace.value,data)
+        return data
+    
+        
+    def addlines(self,data):
+        temp = []
+        data=data.split('$$')
+        temp=data[0]
+        temp=temp+'RETURNS STRING\nLANGUAGE JAVASCRIPT\nAS\n'
+        data[0]=temp
+        data='$$'.join(data)
+        return data
+       
+    def workaround(self,data):
+        
+        for i in range(1,max_row+1):
+            cell_obj = sheet.cell(row =i, column = 1)
+            t = self.contains_word(cell_obj.value, data)
+            if t and (data.find(sheet.cell(row = i,column = 2).value) == -1 or cell_obj.value.lower() in ('begin', 'end')):
+                if cell_obj.value.lower() in ('begin', 'end'):
+                    cell_replace = sheet.cell(row = i,column = 2)
+                    data = re.sub(cell_obj.value,'\n' + cell_replace.value,data)
+                    
+                else:
+                    cell_replace = sheet.cell(row = i,column = 2)
+                    data = re.sub(cell_obj.value,cell_replace.value,data)
+        print("Exec str func from workaround")
+        data = self.func_conversion(data)
+                    
+        return data
+    
+    def ddlworkaround(self,data):
+        
+        for i in range(1,max_row3+1):
+            cell_obj = sheet3.cell(row =i, column = 1)
+            t = re.search(cell_obj.value,data)
+            if t:
+                cell_replace = sheet3.cell(row = i,column = 2)
+                # print(cell_obj.value)
+                # print(cell_replace.value)
+                # print(data)
+                data = re.sub(cell_obj.value,cell_replace.value,data)
+        
+
+
+
+        return data
+    
+    def label_procedure(self,data):
+    
+        data = re.sub("DATABASE\s\w+;","",data)
+        label = re.finditer(".LABEL \w+",data)
+        for lb in label:
+            labelname = lb.group().replace(".LABEL ","")
+            data = re.sub(".LABEL "+labelname,"CREATE PROCEDURE " + labelname +"\nBEGIN",data)
+        d = re.finditer("CREATE PROCEDURE " + labelname +"\nBEGIN([\S\s]*?);",data)
+        if d:
+            for da in d:
+                procedure = da.group() + "\nEND"
+                data = re.sub("CREATE PROCEDURE " + labelname +"\nBEGIN([\S\s]*?);",procedure,data)
+        else:
+            data = re.sub("CREATE PROCEDURE \w+\(\)\nBEGIN","",data)
+        return data
+
+    def add_paranthesis(self, data):
+        
+        temp = data.split('\n')
+        proc_statement_arr = temp[0].lower().split(' ')
+        procedure_index = proc_statement_arr.index('procedure')
+        if(procedure_index != -1 and len(proc_statement_arr) > procedure_index and not self.has_existing_params(data)):
+            proc_name = proc_statement_arr[procedure_index + 1]
+            proc_name += '()'
+            proc_statement_arr[procedure_index + 1] = proc_name
+            proc_statement_str = ' '.join(proc_statement_arr)
+            temp[0] = proc_statement_str.upper()
+            temp='\n'.join(temp)
+            return temp
+        else:
+            return data
+
+    def contains_word(self, w, data):
+        
+        return re.compile(r'\b({0})\b'.format(w), flags=re.IGNORECASE).search(data)
+
+    def has_existing_params(self, data):
+        
+        if data:
+            if (self.contains_word('IS', data)):
+                procedure_syntax = data.split('IS')
+                sp_array = re.split('[()]', procedure_syntax[0])
+                if len(sp_array) >=2:
+                    has_existing_params = len(sp_array) >= 2 or sp_array[1] != ''
+                else:
+                    has_existing_params = False
+                return has_existing_params
+            elif (self.contains_word('RETURNS STRING', data)):
+                procedure_syntax = data.split('RETURNS')
+                sp_array = re.split('[()]', procedure_syntax[0])
+                sp_array = [each_string.upper() for each_string in sp_array]
+                if len(sp_array) >=2:
+                    has_existing_params = len(sp_array) >= 2 or sp_array[1] != ''
+                else:
+                    has_existing_params = False
+                return has_existing_params
+        else:
+            return False
+
+    def procedure_correction(self,data):
+        
+        temp=[]
+        query_types = ['insert','update','delete','merge', 'create','select']
+        
+        full_script = data
+        plsql_stat = re.search('BEGIN(.*)END', ' '.join(data.split()), re.IGNORECASE)
+        if plsql_stat == None:
+            return full_script
+        all_stat = sqlparse.split(plsql_stat.group(1))
+        for stat in all_stat:
+            result = ''
+            if stat.strip().split()[0].lower() in query_types and not self.has_existing_params(full_script) and not self.has_in_block_vars:
+                if stat.strip()[-1] == ';':
+                    result += stat.strip()[0:len(stat.strip())-1]
+                    
+                else:
+                    result += stat.strip()
+                temp.append('snowflake.execute( {{sqlText: "{}" }});'.format(result))
+            elif stat.strip().split()[0].lower() in query_types and self.has_existing_params(full_script) and not self.has_in_block_vars:
+                
+                if stat.strip()[-1] == ';':
+                    result += stat.strip()[0:len(stat.strip())-1]
+                    
+                else:
+                    result += stat.strip()
+                    
+                result_query, used_params = self.append_params_to_query(result, full_script)
+                if used_params:
+                    
+                    used_params = [each_string.upper() for each_string in used_params]
+                    temp.append('snowflake.execute( {{sqlText: "{}", binds: [{}] }});'.format(result_query,",".join(map(str, used_params))))
+                else:
+                    
+                    temp.append('snowflake.execute( {{sqlText: "{}" }});'.format(result))
+                    
+            elif len(self.in_block_vars) > 0 and self.has_in_block_vars and stat.strip().split()[0].lower() in query_types:
+                
+                if stat.strip()[-1] == ';':
+                    
+                    result += stat.strip()[0:len(stat.strip())-1]
+                    
+                else:
+                    result += stat.strip()
+                result_query, used_params = self.create_scoped_vars_query(result, full_script)
+
+                if used_params:
+                    temp.append('snowflake.execute( {{sqlText: "{}", binds: [{}] }});'.format(result_query,",".join(map(str, used_params))))
+                else:
+                    temp.append('snowflake.execute( {{sqlText: "{}" }});'.format(result))
+
+            else:
+                result += stat.strip()
+                temp.append(result)
+        plsql_data='\n'.join(temp)
+        begin_i = re.search('begin',full_script,re.IGNORECASE)
+        end_i =  re.finditer('end',full_script,re.IGNORECASE)
+        for last in end_i:
+            
+            last_el = last
+            
+        full_script = full_script.replace(full_script[begin_i.span()[1]:last_el.span()[0]],' \n'+ plsql_data)
+        index = full_script.find('BEGIN')
+        return full_script
+
+    def capture_params(self,bteq_script):
+        
+        get_variables=[]
+        get_staticvar=[]
+        copy = False
+        temp_script = bteq_script
+        for lin in temp_script.splitlines():
+
+            if lin.upper().strip() == "AS" or lin.upper().strip() == "DECLARE" or lin.upper().strip() == "IS":
+                copy = True
+                continue
+            elif lin.upper().strip() == "BEGIN":
+                copy = False
+                continue
+            elif copy:
+                self.has_in_block_vars = True
+                
+                for i in lin.split(';'):        
+                    
+                    if  (i.find(':=') == -1):
+                        
+                            trimo=i.split(' ')
+                            
+                            for j in trimo:  
+                                
+                                if j != '' and not j.endswith(';'):
+                                    sf_dec='set '+j  
+                                    firstDelPos=temp_script.find("AS") # get the position of
+                                    secondDelPos=temp_script.find("BEGIN") # get the position of
+                                    temp_script = temp_script.replace(temp_script[firstDelPos+3:secondDelPos], "")
+                                    t = re.search(j,temp_script)
+                                    temp_script = re.sub(j,sf_dec,temp_script,1)
+                                    
+                    
+                    if i!= '' and ':=' in i: 
+                                                                              
+                                    trim_p=i.split(" ")
+                                    for j in trim_p:                                                
+                                        if j == ':=':
+                                            trim_p.pop(trim_p.index(j)-1)
+                                            sf_var = ''.join(trim_p)
+                                            sf_assign1='var '+ sf_var
+                                            self.in_block_vars.append(sf_var.split(':=')[0])
+                                            get_variables.append(sf_assign1)
+                                    firstDelPos=temp_script.find("AS") # get the position of
+                                    secondDelPos=temp_script.find("BEGIN") # get the position of
+                                    temp_script = temp_script.replace(temp_script[firstDelPos+3:secondDelPos], "")
+        
+        group=''
+        for i in get_variables:
+            group+=''.join(i)+';'+'\n'  
+            
+        group='BEGIN'+'\n'+group
+        t = re.search("BEGIN",bteq_script.upper())
+        bteq_script = re.sub("BEGIN",group,bteq_script,1,flags=re.I)   
+        t = re.search(':=',bteq_script)
+        bteq_script = re.sub(':=','=',bteq_script)
+        bteq_script=re.sub(r'\bBEGIN\b','RETURNS STRING\nLANGUAGE JAVASCRIPT\nAS\nBEGIN\n',bteq_script,1,re.IGNORECASE)
+        return bteq_script        
+        
+
+    def append_params_to_query(self, result_query, input_query):
+        
+        params = []
+        unused_params = []
+        params = self.get_query_params(input_query)
+        
+        
+        if len(params) > 2 and params[1] != '':
+            temp_result = result_query
+            
+            procedure_params = params[1:-1]
+            if len(procedure_params) == 1:
+                procedure_params = procedure_params[0].split(',')
+                
+            for index, parameter in enumerate(procedure_params): 
+                if len(parameter.split()) == 2:
+                    procedure_params[index] = parameter.split()[0].strip()
+                    
+            for parameter in procedure_params:
+                if temp_result.find(parameter) != -1:
+                    temp_result = temp_result.replace(parameter, '?')
+                    temp_result = re.sub(r':\?',"?",temp_result)
+                
+                else:
+                    unused_params.append(parameter)
+            
+            for p in unused_params:
+                if p in procedure_params:
+                    procedure_params.remove(p)
+                    
+            
+            return temp_result, procedure_params
+        else:
+            return result_query, []
+
+    def get_query_params(self, input_query):
+        
+        if (self.contains_word('IS', input_query)):
+            
+            procedure_syntax = input_query.split('IS')
+            params = re.split('[()]', procedure_syntax[0])
+            
+        elif (self.contains_word('RETURNS STRING', input_query)):
+            
+            procedure_syntax = input_query.split('RETURNS')
+            procedure_syntax[0]=re.sub(r'INTEGER','FLOAT',procedure_syntax[0],flags=re.I)
+            params = re.split('[()]', procedure_syntax[0])
+            
+        elif (self.contains_word('BEGIN', input_query)):
+           
+           procedure_syntax = input_query.split('BEGIN')
+           procedure_syntax[0]=re.sub(r'INTEGER','FLOAT',procedure_syntax[0],flags=re.I)
+           params = re.split('[()]', procedure_syntax[0])
+           
+        return params
+
+    def create_scoped_vars_query(self, result_query, input_query):
+        
+        params = []
+        unused_params = []
+        params = self.get_query_params(input_query)
+        if (len(params) > 2 and params[1] != '') or len(self.in_block_vars) > 0:
+            temp_result = result_query
+            procedure_params = params[1:-1]
+            if len(procedure_params) == 1:
+                procedure_params = procedure_params[0].split(',')
+            
+            for index, parameter in enumerate(procedure_params): 
+                if len(parameter.split()) == 2:
+                    procedure_params[index] = parameter.split()[0].strip()
+            
+            for parameter in procedure_params:
+                if temp_result.find(parameter) != -1:
+                    temp_result = temp_result.replace(parameter, '?')
+                else:
+                    unused_params.append(parameter)
+            for variable in self.in_block_vars:
+                if temp_result.find(variable) != -1:
+                    temp_result = temp_result.replace(variable, '?')
+                    procedure_params.append(variable)
+                else:
+                    unused_params.append(variable)
+            for p in unused_params:
+                if p in procedure_params:
+                    procedure_params.remove(p)
+            return temp_result, procedure_params
+        else:
+            return result_query, []
+
+
+    def clear_inblock_vars(self, query):
+        
+        q = re.sub(r'(?<=\bIS\b)(.*)(?=\bBEGIN\b)', '\n', query, flags=re.DOTALL)
+        return q
+
+    def capitalize_query_params(self, input_query, result_query):
+        
+        params = []
+        unused_params = []
+        input_query=result_query
+        result_query = re.sub(r'\bINTEGER\b',"FLOAT",result_query,flags=re.I)
+        params = self.get_query_params(input_query)
+        
+        if len(params) > 2 and params[1] != '':
+            procedure_params = params[1:-1]
+            if len(procedure_params) == 1:
+                procedure_params = procedure_params[0].split(',')
+            for index, parameter in enumerate(procedure_params): 
+                if len(parameter.split()) == 2:
+                    procedure_params[index] = parameter.split()[0].strip()
+            for param in procedure_params:
+                result_query = result_query.replace(param, param.upper())
+            return result_query
+        else:
+            return result_query
+        
+    def func_conversion(self, input_query):
+        print("*******Inside func_conversion")
+        print('input_query',input_query)
+        input_str=input_query
+        input_str=re.sub(r'[\s\n]*CHARACTERS[\s\n]*\(', ' LENGTH(',input_str, flags=re.IGNORECASE)
+        input_str=re.sub(r'[\s\n]*CHARS[\s\n]*\(', ' LENGTH(',input_str, flags=re.IGNORECASE)
+        input_str=re.sub(r'[\s\n]*CHAR[\s\n]*\(', ' LENGTH(',input_str, flags=re.IGNORECASE)
+        input_str=re.sub(r'[\s\n]*CHARACTER_LENGTH[\s\n]*\(', ' LENGTH(',input_str, flags=re.IGNORECASE)
+        input_str=re.sub(r'[\s\n]*TD_LEFT[\s\n]*\(', ' LEFT(',input_str, flags=re.IGNORECASE)
+        input_str=re.sub(r'[\s\n]*LOCATE[\s\n]*\(', ' POSITION(',input_str, flags=re.IGNORECASE)
+        
+        input_str=re.sub(r'[\s\n]*OREPLACE[\s\n]*\(', ' REPLACE(',input_str, flags=re.IGNORECASE)
+        input_str=re.sub(r'[\s\n]*OTRANSLATE[\s\n]*\(', ' TRANSLATE(',input_str, flags=re.IGNORECASE)
+        input_str=re.sub(r'[\s\n]*TD_RIGHT[\s\n]*\(', ' RIGHT(',input_str, flags=re.IGNORECASE)
+
+        input_str=re.sub(r'[\s\n]*UCASE[\s\n]*\(', ' UPPER(',input_str, flags=re.IGNORECASE)
+
+
+        input_str=re.sub(r'[\s\n]*TRIM[\s\n]*\([\s\n]*BOTH[\s\n]*FROM'," TRIM(",  input_str, flags=re.IGNORECASE)
+        input_str=re.sub(r'[\s\n]*TRIM[\s\n]*\([\s\n]*TRAILING[\s\n]*FROM'," RTRIM(",  input_str, flags=re.IGNORECASE)
+        input_str=re.sub(r'[\s\n]*TRIM[\s\n]*\([\s\n]*LEADING[\s\n]*FROM'," LTRIM(",  input_str, flags=re.IGNORECASE)
+
+#Logic for substring function conversion
+
+        if(re.search("SUBSTRING",input_str, flags=re.IGNORECASE)) :
+            x=len(re.findall("SUBSTRING", input_str, flags=re.IGNORECASE))
+            POS=0
+            CPOS=1
+            STR_LEN = len(input_str)
+            print ("STR_LEN=" + ' ' + str(STR_LEN))
+            print("X=" + str(x)) 
+            for i in range(x):
+                S1 =  "SUBSTRING"
+                CB = ")"
+                POS = input_str.upper()[POS:STR_LEN].find(S1) + POS
+                CPOS = input_str[POS:STR_LEN].find(CB)  + POS + 1
+#               print ("POS=" + ' ' + str(POS) + ' CPOS= ' + str(CPOS) + ' '  + input_str[POS:CPOS])    
+                cg = re.sub("FROM" , ",   " , input_str[POS:CPOS] , flags=re.IGNORECASE)
+                cg = re.sub("FOR" , ",  " , cg , flags=re.IGNORECASE)
+#                print ("CG = " + cg)
+                input_str = input_str[0:POS] + cg + input_str[CPOS:STR_LEN]
+                POS=CPOS+1
+        
+        #STR_LEN = len(input_str)
+        #print ("STR_LEN=" + ' ' + str(STR_LEN))
+
+        #print (input_str)
+        #return input_str
+        
+        
+#Logic of Index function
+
+        if(re.search("INDEX",input_str, flags=re.IGNORECASE)) :
+            ix=len(re.findall("INDEX", input_str, flags=re.IGNORECASE))
+            iPOS=0
+            iCPOS=1
+            iSTR_LEN = len(input_str)
+            print ("iSTR_LEN=" + ' ' + str(iSTR_LEN))
+            
+            print("iX=" + str(ix)) 
+            for i in range(ix):
+                iS1 =  "INDEX"
+                iOB = "("
+                iCB = ")"
+                iPOS = input_str.upper()[iPOS:iSTR_LEN].find(iS1) + iPOS
+                iCPOS = input_str[iPOS:iSTR_LEN].find(iCB)  + iPOS + 1
+                iStr1 = input_str[iPOS:iCPOS]
+                iStrC = iStr1.find(",")
+                iStrOB = iStr1.find(iOB)
+                iStrCB = iStr1.find(iCB)
+                pm1 = iStr1[iStrOB+1:iStrC]
+                pm2 = iStr1[iStrC+1:iStrCB]
+                icg = iStr1[0:iStrOB+1] + pm2 + "," + pm1 + iStr1[iStrCB] 
+                #print("pm1 = " + pm1 + " pm2 = " + pm2 )
+                #print ("iPOS=" + ' ' + str(iPOS) + ' iCPOS= ' + str(iCPOS) + ' '  + icg)    
+                input_str = input_str[0:iPOS] + icg + input_str[iCPOS:iSTR_LEN]
+                #print(input_str)
+                iPOS=iCPOS+1
+                
+        input_str=re.sub('INDEX',"POSITION",  input_str, flags=re.IGNORECASE)
+        print("After Change        " + input_str)
+
+        STR_LEN = len(input_str)
+        print ("STR_LEN=" + ' ' + str(STR_LEN))
+        return input_str
+       
+
+if __name__ == "__main__":
+    app.run()
